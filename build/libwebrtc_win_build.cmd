@@ -92,6 +92,12 @@ cd src
 copy .vpython3 ..
 call git apply "libwebrtc\patches\custom_audio_source_m144.patch" -v --ignore-space-change --ignore-whitespace --whitespace=nowarn
 call git apply "libwebrtc\patches\add_libwebrtc_build_target.patch" -v --ignore-space-change --ignore-whitespace --whitespace=nowarn
+rem Ostrean: capture buffer headroom for RDP (clicks); fail the build if it does not apply.
+call git apply "libwebrtc\patches\ostrean_capture_buffer_m144.patch" -v --ignore-space-change --ignore-whitespace --whitespace=nowarn
+if errorlevel 1 (
+  echo Error: ostrean_capture_buffer_m144.patch did not apply
+  exit /b 1
+)
 cd ..
 
 if not exist "%ARTIFACTS_DIR%\lib" (

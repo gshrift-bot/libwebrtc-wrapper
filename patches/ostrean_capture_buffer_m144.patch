@@ -1,0 +1,94 @@
+diff --git a/modules/audio_device/win/audio_device_core_win.cc b/modules/audio_device/win/audio_device_core_win.cc
+index f21f7aa..4a390bb 100644
+--- a/modules/audio_device/win/audio_device_core_win.cc
++++ b/modules/audio_device/win/audio_device_core_win.cc
+@@ -25,6 +25,7 @@
+ #include <uuids.h>
+ #include <windows.h>
+ 
++#include <cstdlib>
+ #include <iomanip>
+ 
+ #include "api/make_ref_counted.h"
+@@ -2110,6 +2111,29 @@ int32_t AudioDeviceWindowsCore::InitRecordingDMO() {
+ //  InitRecording
+ // ----------------------------------------------------------------------------
+ 
++// Ostrean: in an RDP session the minimal shared-mode capture buffer (~20 ms)
++// overflows whenever the capture thread is a little late, and the lost frames
++// are heard as clicks (prod 21.11.2026: 5-10% of the microphone lost while
++// another reader of the same device lost nothing). Ask for headroom instead;
++// the stream is still read on every event, so this adds no latency.
++// OSTREAN_WEBRTC_CAPTURE_BUFFER_MS overrides it (0 = the WebRTC default).
++static REFERENCE_TIME OstreanCaptureBufferDuration() {
++  char value[16] = {0};
++  const DWORD length = GetEnvironmentVariableA(
++      "OSTREAN_WEBRTC_CAPTURE_BUFFER_MS", value, sizeof(value));
++  int ms = 100;
++  if (length > 0 && length < sizeof(value)) {
++    ms = atoi(value);
++  }
++  if (ms < 0) {
++    ms = 0;
++  }
++  if (ms > 500) {
++    ms = 500;
++  }
++  return static_cast<REFERENCE_TIME>(ms) * 10000;
++}
++
+ int32_t AudioDeviceWindowsCore::InitRecording() {
+   MutexLock lock(&mutex_);
+ 
+@@ -2257,7 +2281,7 @@ int32_t AudioDeviceWindowsCore::InitRecording() {
+           AUDCLNT_STREAMFLAGS_NOPERSIST,   // volume and mute settings for an
+                                            // audio session will not persist
+                                            // across system restarts
+-      0,                    // required for event-driven shared mode
++      OstreanCaptureBufferDuration(),  // capacity; 0 = the engine minimum
+       0,                    // periodicity
+       (WAVEFORMATEX*)&Wfx,  // selected wave format
+       NULL);                // session GUID
+@@ -2289,6 +2313,10 @@ int32_t AudioDeviceWindowsCore::InitRecording() {
+                         << bufferFrameCount << " (<=> "
+                         << bufferFrameCount * _recAudioFrameSize << " bytes)";
+   }
++  RTC_LOG(LS_WARNING) << "[CAPT] buffer requested "
++                      << OstreanCaptureBufferDuration() / 10000 << " ms, got "
++                      << bufferFrameCount << " frames at " << _recSampleRate
++                      << " Hz";
+ 
+   // Set the event handle that the system signals when an audio buffer is ready
+   // to be processed by the client.
+@@ -3087,6 +3115,9 @@ DWORD AudioDeviceWindowsCore::DoCaptureThread() {
+   UINT32 syncBufIndex = 0;
+ 
+   _readSamples = 0;
++  // Ostrean: frames the engine dropped because the buffer was full.
++  UINT32 discontinuities = 0;
++  ULONGLONG discontinuitySince = GetTickCount64();
+ 
+   // Initialize COM as MTA in this thread.
+   ScopedCOMInitializer comInit(ScopedCOMInitializer::kMTA);
+@@ -3220,6 +3251,21 @@ DWORD AudioDeviceWindowsCore::DoCaptureThread() {
+           break;
+         }
+ 
++        if (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) {
++          ++discontinuities;
++        }
++        const ULONGLONG discontinuityNow = GetTickCount64();
++        if (discontinuityNow - discontinuitySince >= 10000) {
++          if (discontinuities > 0) {
++            RTC_LOG(LS_WARNING)
++                << "[CAPT] data discontinuity " << discontinuities
++                << " times in " << (discontinuityNow - discontinuitySince)
++                << " ms";
++          }
++          discontinuities = 0;
++          discontinuitySince = discontinuityNow;
++        }
++
+         if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+           // Treat all of the data in the packet as silence and ignore the
+           // actual data values.

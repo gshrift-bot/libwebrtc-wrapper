@@ -1,14 +1,6 @@
 name: libwebrtc binary build/release.
 on:
-  push:
-    paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - 'NOTICE'
-      - '.gitignore'
-      - '.dockerignore'
-    tags:
-      - "*"
+  # Ostrean fork: builds only on demand (no push/tag builds).
   workflow_dispatch:
     inputs:
       commitHash:
@@ -113,7 +105,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [x64, arm64]
+        arch: [x64]
         profile:
           - ${{ github.event.inputs.configuration || 'release' }}
     name: Build libwebrtc.dll for Windows (${{ matrix.arch }}-${{ matrix.profile }})
